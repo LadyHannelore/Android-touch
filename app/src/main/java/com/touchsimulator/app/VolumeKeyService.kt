@@ -1,112 +1,108 @@
 package com.touchsimulator.app
 
-import android.app.Notification
-import android.app.NotificationManager
-import android.app.Service
-import android.content.Context
+import android.accessibilityservice.AccessibilityService
+import android.accessibilityservice.GestureDescription
 import android.content.Intent
-import android.media.AudioManager
-import android.os.Handler
-import android.os.IBinder
-import android.os.Looper
+import android.graphics.Path
 import android.util.Log
 import android.view.KeyEvent
-import androidx.core.app.NotificationCompat
+import android.view.accessibility.AccessibilityEvent
+import android.widget.Toast
 
-class VolumeKeyService : Service() {
-    
-    private lateinit var audioManager: AudioManager
-    private lateinit var notificationManager: NotificationManager
-    private val handler = Handler(Looper.getMainLooper())
-    
+class VolumeKeyService : AccessibilityService() {
+
     companion object {
         private const val TAG = "VolumeKeyService"
-        private const val NOTIFICATION_ID = 1
-        private const val CHANNEL_ID = "TOUCH_SIMULATOR_CHANNEL"
+        var instance: VolumeKeyService? = null
     }
-    
-    override fun onCreate() {
-        super.onCreate()
-        audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
-        notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        Log.d(TAG, "VolumeKeyService created")
+
+    override fun onServiceConnected() {
+        super.onServiceConnected()
+        instance = this
+        Log.d(TAG, "Volume Key Service Connected")
+        
+        // Start the touch simulation service
+        val intent = Intent(this, TouchSimulationService::class.java)
+        startService(intent)
     }
-    
-    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        startForeground(NOTIFICATION_ID, createNotification())
-        startVolumeMonitoring()
-        Log.d(TAG, "VolumeKeyService started")
-        return START_STICKY
+
+    override fun onAccessibilityEvent(event: AccessibilityEvent?) {
+        // We don't need to handle accessibility events for this use case
     }
-    
-    private fun createNotification(): Notification {
-        return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("Touch Simulator")
-            .setContentText("Press Volume Down to simulate touch")
-            .setSmallIcon(android.R.drawable.ic_media_play)
-            .setOngoing(true)
-            .build()
+
+    override fun onInterrupt() {
+        Log.d(TAG, "Service interrupted")
     }
-    
-    private fun startVolumeMonitoring() {
-        // Note: This is a simplified approach. In a real app, you might need to use
-        // a system overlay or accessibility service to capture volume keys globally
-        val volumeMonitorRunnable = object : Runnable {
-            private var lastVolumeLevel = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)
-            
-            override fun run() {
-                val currentVolumeLevel = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)
-                
-                if (currentVolumeLevel < lastVolumeLevel) {
-                    // Volume down detected
-                    onVolumeDownPressed()
-                    // Restore volume to prevent actual volume change
-                    audioManager.setStreamVolume(
-                        AudioManager.STREAM_MUSIC, 
-                        lastVolumeLevel, 
-                        0
-                    )
-                } else {
-                    lastVolumeLevel = currentVolumeLevel
+
+    override fun onKeyEvent(event: KeyEvent?): Boolean {
+        event?.let {
+            if (it.action == KeyEvent.ACTION_DOWN) {
+                when (it.keyCode) {
+                    KeyEvent.KEYCODE_VOLUME_DOWN -> {
+                        Log.d(TAG, "Volume Down pressed")
+                        performTouch()
+                        return true // Consume the event to prevent volume change
+                    }
+                    KeyEvent.KEYCODE_VOLUME_UP -> {
+                        // Optional: You can add functionality for volume up if needed
+                        Log.d(TAG, "Volume Up pressed")
+                        return false // Let the system handle volume up normally
+                    }
                 }
-                
-                // Check again after a short delay
-                handler.postDelayed(this, 100)
             }
         }
-        
-        handler.post(volumeMonitorRunnable)
+        return super.onKeyEvent(event)
     }
-    
-    private fun onVolumeDownPressed() {
-        Log.d(TAG, "Volume down pressed - simulating touch")
+
+    private fun performTouch() {
+        val prefs = getSharedPreferences("touch_position", MODE_PRIVATE)
+        val isPositionSet = prefs.getBoolean("position_set", false)
         
-        // Trigger touch simulation
-        TouchSimulationService.instance?.simulateTouch()
-        
-        // Update notification to show last touch
-        val notification = NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("Touch Simulator")
-            .setContentText("Touch simulated! (${System.currentTimeMillis()})")
-            .setSmallIcon(android.R.drawable.ic_media_play)
-            .setOngoing(true)
-            .build()
-        
-        notificationManager.notify(NOTIFICATION_ID, notification)
-        
-        // Reset notification after 2 seconds
-        handler.postDelayed({
-            notificationManager.notify(NOTIFICATION_ID, createNotification())
-        }, 2000)
+        if (!isPositionSet) {
+            Toast.makeText(this, "Touch position not set. Please set it in the app.", Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        val x = prefs.getFloat("x", 0f)
+        val y = prefs.getFloat("y", 0f)
+
+        Log.d(TAG, "Performing touch at ($x, $y)")
+
+        // Create a gesture description for the touch
+        val path = Path()
+        path.moveTo(x, y)
+
+        val gestureBuilder = GestureDescription.Builder()
+        val strokeDescription = GestureDescription.StrokeDescription(path, 0, 100)
+        gestureBuilder.addStroke(strokeDescription)
+
+        val gesture = gestureBuilder.build()
+
+        // Perform the gesture
+        val result = dispatchGesture(gesture, object : GestureResultCallback() {
+            override fun onCompleted(gestureDescription: GestureDescription?) {
+                super.onCompleted(gestureDescription)
+                Log.d(TAG, "Touch gesture completed successfully")
+            }
+
+            override fun onCancelled(gestureDescription: GestureDescription?) {
+                super.onCancelled(gestureDescription)
+                Log.e(TAG, "Touch gesture was cancelled")
+            }
+        }, null)
+
+        if (!result) {
+            Log.e(TAG, "Failed to dispatch touch gesture")
+            Toast.makeText(this, "Failed to perform touch", Toast.LENGTH_SHORT).show()
+        } else {
+            // Visual feedback
+            Toast.makeText(this, "Touch simulated!", Toast.LENGTH_SHORT).show()
+        }
     }
-    
-    override fun onBind(intent: Intent?): IBinder? {
-        return null
-    }
-    
+
     override fun onDestroy() {
         super.onDestroy()
-        handler.removeCallbacksAndMessages(null)
-        Log.d(TAG, "VolumeKeyService destroyed")
+        instance = null
+        Log.d(TAG, "Volume Key Service Destroyed")
     }
 }
