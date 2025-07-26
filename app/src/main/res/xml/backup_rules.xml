@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+       This file should be included in any app project, independent of its design.
+       These rules are used by the tools to improve suggestion quality.
+    -->
+    <paths>
+        <external-path name="external_files" path="."/>
+    </paths>
+</resources>
